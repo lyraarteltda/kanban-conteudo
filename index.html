@@ -172,6 +172,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
   <div class="topbar-actions">
     <button class="btn" onclick="openMemberModal()">👥 Equipe</button>
     <button class="btn" onclick="toggleLog()">📋 Log</button>
+    <button class="btn" onclick="openSettingsModal()" title="Configurações">⚙️</button>
   </div>
 </div>
 
@@ -228,6 +229,38 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
     <button class="btn btn-sm" onclick="toggleLog()">✕</button>
   </div>
   <div class="log-body" id="logBody"></div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal" style="max-width:420px">
+    <!-- Password Gate -->
+    <div id="settingsPasswordGate">
+      <h2>⚙️ Configurações</h2>
+      <div class="modal-field">
+        <label>Senha de Administrador</label>
+        <input type="password" id="settingsPassword" placeholder="Digite a senha..." onkeydown="if(event.key==='Enter')checkSettingsPassword()">
+      </div>
+      <div id="settingsPasswordError" style="color:var(--low);font-size:13px;margin-bottom:12px;display:none">Senha incorreta. Tente novamente.</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeSettingsModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="checkSettingsPassword()">Entrar</button>
+      </div>
+    </div>
+    <!-- Settings Panel (hidden until password accepted) -->
+    <div id="settingsPanel" style="display:none">
+      <h2>⚙️ Configurações</h2>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <button class="btn btn-danger" onclick="confirmResetRedZone()" style="width:100%;justify-content:center;padding:14px">🔴 Resetar Contagem Red Zone</button>
+        <p style="font-size:12px;color:var(--text-dim);margin-top:-6px">Remove todos os registros de tempo acumulado em Red Zone das tabelas red_zone_log e red_zone_member_log.</p>
+        <button class="btn" onclick="confirmStoreRedZone()" style="width:100%;justify-content:center;padding:14px;border-color:var(--accent-purple);color:var(--accent-purple)">💾 Salvar Snapshot Red Zone</button>
+        <p style="font-size:12px;color:var(--text-dim);margin-top:-6px">Exporta os dados atuais de Red Zone como arquivo JSON.</p>
+      </div>
+      <div class="modal-actions" style="margin-top:24px">
+        <button class="btn" onclick="closeSettingsModal()">Fechar</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- RED ZONE HISTORY MODAL -->
@@ -970,10 +1003,79 @@ function initials(name) {
   return name.substring(0, 2).toUpperCase();
 }
 
+// ─── SETTINGS ───
+function openSettingsModal() {
+  document.getElementById('settingsPasswordGate').style.display = '';
+  document.getElementById('settingsPanel').style.display = 'none';
+  document.getElementById('settingsPassword').value = '';
+  document.getElementById('settingsPasswordError').style.display = 'none';
+  document.getElementById('settingsModal').classList.add('active');
+  setTimeout(() => document.getElementById('settingsPassword').focus(), 100);
+}
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').classList.remove('active');
+  document.getElementById('settingsPassword').value = '';
+}
+
+function checkSettingsPassword() {
+  const pw = document.getElementById('settingsPassword').value;
+  if (pw === 'adminmaestros') {
+    document.getElementById('settingsPasswordGate').style.display = 'none';
+    document.getElementById('settingsPanel').style.display = '';
+  } else {
+    document.getElementById('settingsPasswordError').style.display = '';
+    document.getElementById('settingsPassword').value = '';
+    document.getElementById('settingsPassword').focus();
+  }
+}
+
+async function confirmResetRedZone() {
+  if (!confirm('Tem certeza que deseja RESETAR todos os dados de Red Zone? Esta ação não pode ser desfeita.')) return;
+  if (!confirm('CONFIRMAÇÃO FINAL: Todos os registros de red_zone_log e red_zone_member_log serão permanentemente excluídos. Continuar?')) return;
+
+  await sb.from('red_zone_member_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('red_zone_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+  redZoneLogs = [];
+  activeRedZones = {};
+  await logAction('red_zone_reset', '🔴 Todos os dados de Red Zone foram resetados via Configurações');
+  alert('Red Zone resetada com sucesso!');
+  closeSettingsModal();
+  renderBoard();
+}
+
+async function confirmStoreRedZone() {
+  if (!confirm('Deseja exportar um snapshot dos dados atuais de Red Zone como JSON?')) return;
+
+  const { data: rzLogs } = await sb.from('red_zone_log').select('*').order('started_at', { ascending: false });
+  const { data: rzMembers } = await sb.from('red_zone_member_log').select('*');
+
+  const snapshot = {
+    exported_at: new Date().toISOString(),
+    red_zone_logs: rzLogs || [],
+    red_zone_member_logs: rzMembers || []
+  };
+
+  const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `red-zone-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  await logAction('red_zone_snapshot', '💾 Snapshot de Red Zone exportado via Configurações');
+  alert('Snapshot exportado com sucesso!');
+}
+
 // Close modals on overlay click
 document.getElementById('cardModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeCardModal(); });
 document.getElementById('memberModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeMemberModal(); });
 document.getElementById('rzModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeRzModal(); });
+document.getElementById('settingsModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettingsModal(); });
 
 init();
 </script>
