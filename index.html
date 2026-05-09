@@ -259,6 +259,7 @@ let cardTimers = {};
 let sortableInstances = [];
 let redZoneLogs = [];
 let activeRedZones = {};
+let rzCheckRunning = false;
 
 const DEFAULT_COLUMNS = [
   { name: 'Brutos', position: 0 },
@@ -281,7 +282,6 @@ async function init() {
   startTimers();
   startRedZoneTimers();
   subscribeRealtime();
-  checkRedZones();
 }
 
 async function loadAll() {
@@ -806,6 +806,11 @@ function isColumnInRedZone(col, idx) {
 }
 
 async function checkRedZones() {
+  if (rzCheckRunning) return;
+  rzCheckRunning = true;
+  try { await _checkRedZonesInner(); } finally { rzCheckRunning = false; }
+}
+async function _checkRedZonesInner() {
   const rules = getRedZoneRules();
   for (const rule of rules) {
     const watchCards = cards.filter(c => c.column_id === rule.watchColId);
