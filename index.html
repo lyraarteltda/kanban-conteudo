@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kanban Conteúdo — Maestros da IA</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+--bg:#0a0a0f;--bg-elev:#13161f;--bg-card:rgba(255,255,255,.04);
+--border:rgba(255,255,255,.08);--border-hover:rgba(167,139,250,.4);
+--text:#e8e8ec;--text-muted:#9ca3af;--text-dim:#6b7280;
+--accent-purple:#a78bfa;--accent-pink:#f472b6;--accent-amber:#fbbf24;
+--good:#10b981;--mid:#eab308;--low:#ef4444;
+--col-brutos:#6366f1;--col-decupagem:#8b5cf6;--col-primeiro:#a78bfa;
+--col-revisao1:#f472b6;--col-corte:#fb923c;--col-revisao-final:#fbbf24;
+--col-upload:#10b981;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;min-height:100vh;overflow-x:auto}
+.bg-gradient{position:fixed;inset:0;z-index:-1;background:radial-gradient(ellipse at top,#1a1030 0%,#0a0a0f 55%),radial-gradient(ellipse at bottom right,#0c2030 0%,transparent 60%)}
+
+/* TOP BAR */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border);background:rgba(19,22,31,.85);backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.topbar h1{font-size:clamp(16px,2vw,22px);font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,#fff 0%,var(--accent-purple) 50%,var(--accent-pink) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-actions{display:flex;gap:8px;align-items:center}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;transition:all .2s}
+.btn:hover{border-color:var(--border-hover);background:rgba(167,139,250,.08)}
+.btn-primary{background:linear-gradient(135deg,var(--accent-purple),var(--accent-pink));border:none;color:#fff;font-weight:600}
+.btn-primary:hover{opacity:.9}
+.btn-sm{padding:4px 8px;font-size:12px}
+.btn-danger{border-color:var(--low);color:var(--low)}
+.btn-danger:hover{background:rgba(239,68,68,.12)}
+
+/* BOARD */
+.board{display:flex;gap:12px;padding:16px 20px;min-height:calc(100vh - 60px);overflow-x:auto}
+.column{min-width:240px;width:240px;flex-shrink:0;display:flex;flex-direction:column;border-radius:14px;background:var(--bg-elev);border:1px solid var(--border);overflow:hidden}
+.column-header{padding:12px 14px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--border);position:relative}
+.column-header::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.column:nth-child(1) .column-header::before{background:var(--col-brutos)}
+.column:nth-child(2) .column-header::before{background:var(--col-decupagem)}
+.column:nth-child(3) .column-header::before{background:var(--col-primeiro)}
+.column:nth-child(4) .column-header::before{background:var(--col-revisao1)}
+.column:nth-child(5) .column-header::before{background:var(--col-corte)}
+.column:nth-child(6) .column-header::before{background:var(--col-revisao-final)}
+.column:nth-child(7) .column-header::before{background:var(--col-upload)}
+.column-title{font-size:14px;font-weight:700;cursor:text;padding:2px 4px;border-radius:4px;border:1px solid transparent;outline:none;min-height:22px}
+.column-title:hover{border-color:var(--border-hover)}
+.column-title:focus{border-color:var(--accent-purple);background:rgba(167,139,250,.06)}
+.column-title[contenteditable="true"]{cursor:text}
+.column-members{display:flex;gap:4px;flex-wrap:wrap;min-height:20px}
+.member-badge{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;cursor:pointer;transition:transform .15s;border:2px solid var(--bg-elev)}
+.member-badge:hover{transform:scale(1.15)}
+.column-count{font-size:11px;color:var(--text-dim)}
+.column-body{flex:1;padding:8px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-height:100px}
+.column-footer{padding:8px}
+.add-card-btn{width:100%;padding:8px;border-radius:8px;border:1px dashed var(--border);background:transparent;color:var(--text-muted);cursor:pointer;font-size:13px;transition:all .2s}
+.add-card-btn:hover{border-color:var(--accent-purple);color:var(--accent-purple);background:rgba(167,139,250,.04)}
+
+/* CARDS */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:grab;transition:all .15s;position:relative}
+.card:hover{border-color:var(--border-hover);background:rgba(255,255,255,.06)}
+.card:active{cursor:grabbing}
+.card.sortable-ghost{opacity:.4;border-color:var(--accent-purple)}
+.card.sortable-chosen{box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.card-text{font-size:13px;line-height:1.5;word-break:break-word;white-space:pre-wrap}
+.card-text a{color:var(--accent-purple);text-decoration:underline}
+.card-text a:hover{color:var(--accent-pink)}
+.card-timer{font-size:11px;color:var(--accent-amber);margin-top:6px;font-variant-numeric:tabular-nums}
+.card-members{display:flex;gap:2px;margin-top:6px;flex-wrap:wrap}
+.card-member-badge{width:20px;height:20px;border-radius:50%;font-size:8px;font-weight:700;color:#fff;display:flex;align-items:center;justify-content:center}
+.card-actions{position:absolute;top:6px;right:6px;display:none;gap:4px}
+.card:hover .card-actions{display:flex}
+.card-action-btn{width:22px;height:22px;border-radius:4px;border:none;background:var(--bg-elev);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px}
+.card-action-btn:hover{color:var(--text);background:rgba(255,255,255,.1)}
+.card-done{position:relative;overflow:hidden}
+.card-done::after{content:'✓';position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:40px;color:var(--good);background:rgba(16,185,129,.12);border-radius:10px;pointer-events:none}
+
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay.active{display:flex}
+.modal{background:var(--bg-elev);border:1px solid var(--border);border-radius:16px;width:90%;max-width:560px;max-height:85vh;overflow-y:auto;padding:24px}
+.modal h2{font-size:18px;font-weight:700;margin-bottom:16px}
+.modal-field{margin-bottom:16px}
+.modal-field label{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}
+.modal-field textarea,.modal-field input,.modal-field select{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:14px;font-family:inherit;resize:vertical}
+.modal-field textarea:focus,.modal-field input:focus{outline:none;border-color:var(--accent-purple)}
+.modal-field textarea{min-height:80px}
+.link-toolbar{display:flex;gap:6px;margin-top:6px}
+.timer-history{display:flex;flex-direction:column;gap:6px}
+.timer-row{display:flex;justify-content:space-between;padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);font-size:13px}
+.timer-row .col-name{color:var(--text-muted)}
+.timer-row .col-duration{color:var(--accent-amber);font-variant-numeric:tabular-nums}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+.member-assign-list{display:flex;flex-wrap:wrap;gap:6px}
+.member-assign-item{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:13px;transition:all .15s}
+.member-assign-item:hover{border-color:var(--border-hover)}
+.member-assign-item.selected{border-color:var(--accent-purple);background:rgba(167,139,250,.1)}
+
+/* ACTION LOG */
+.log-toggle{position:fixed;bottom:16px;right:16px;z-index:90}
+.log-panel{position:fixed;bottom:0;right:0;width:380px;max-height:50vh;background:var(--bg-elev);border:1px solid var(--border);border-radius:16px 0 0 0;z-index:150;display:none;flex-direction:column}
+.log-panel.active{display:flex}
+.log-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.log-header h3{font-size:14px;font-weight:700}
+.log-body{flex:1;overflow-y:auto;padding:8px 12px}
+.log-entry{padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px;line-height:1.5}
+.log-entry .log-time{color:var(--accent-amber);font-variant-numeric:tabular-nums}
+.log-entry .log-desc{color:var(--text-muted)}
+
+/* MEMBER MANAGEMENT MODAL */
+.member-list{display:flex;flex-direction:column;gap:8px}
+.member-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border)}
+.member-item .member-badge{flex-shrink:0}
+.member-name{flex:1;font-size:14px}
+.color-picker{width:30px;height:30px;border:none;border-radius:50%;cursor:pointer;background:transparent}
+
+/* COLUMN MEMBER ASSIGN DROPDOWN */
+.col-assign-dropdown{position:absolute;top:100%;left:0;right:0;background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;padding:8px;z-index:50;display:none;flex-direction:column;gap:4px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.col-assign-dropdown.active{display:flex}
+.col-assign-option{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px;transition:background .15s}
+.col-assign-option:hover{background:rgba(255,255,255,.06)}
+.col-assign-option.selected{background:rgba(167,139,250,.12)}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+
+/* RESPONSIVE */
+@media(max-width:768px){
+.board{padding:12px}
+.column{min-width:200px;width:200px}
+.log-panel{width:100%;border-radius:16px 16px 0 0}
+}
+@media print{.topbar,.log-toggle,.log-panel{display:none}.board{overflow:visible}}
+</style>
+</head>
+<body>
+<div class="bg-gradient"></div>
+
+<div class="topbar">
+  <h1>Kanban Conteúdo</h1>
+  <div class="topbar-actions">
+    <button class="btn" onclick="openMemberModal()">👥 Equipe</button>
+    <button class="btn" onclick="toggleLog()">📋 Log</button>
+  </div>
+</div>
+
+<div class="board" id="board"></div>
+
+<!-- CARD MODAL -->
+<div class="modal-overlay" id="cardModal">
+  <div class="modal">
+    <h2 id="cardModalTitle">Editar Card</h2>
+    <div class="modal-field">
+      <label>Texto</label>
+      <textarea id="cardText" placeholder="Descreva o conteúdo..."></textarea>
+      <div class="link-toolbar">
+        <button class="btn btn-sm" onclick="insertLink()">🔗 Inserir Link</button>
+      </div>
+    </div>
+    <div class="modal-field">
+      <label>Membros Atribuídos</label>
+      <div class="member-assign-list" id="cardMemberAssign"></div>
+    </div>
+    <div class="modal-field">
+      <label>Histórico de Tempo por Coluna</label>
+      <div class="timer-history" id="timerHistory"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" onclick="deleteCurrentCard()">Excluir</button>
+      <button class="btn" onclick="closeCardModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveCard()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MEMBER MANAGEMENT MODAL -->
+<div class="modal-overlay" id="memberModal">
+  <div class="modal">
+    <h2>Gerenciar Equipe</h2>
+    <div class="member-list" id="memberList"></div>
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <input type="text" id="newMemberName" placeholder="Nome do membro" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:14px">
+      <input type="color" id="newMemberColor" value="#a78bfa" class="color-picker" title="Cor">
+      <button class="btn btn-primary" onclick="addMember()">Adicionar</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeMemberModal()">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ACTION LOG PANEL -->
+<button class="btn log-toggle" onclick="toggleLog()">📋 Log de Ações</button>
+<div class="log-panel" id="logPanel">
+  <div class="log-header">
+    <h3>Log de Ações</h3>
+    <button class="btn btn-sm" onclick="toggleLog()">✕</button>
+  </div>
+  <div class="log-body" id="logBody"></div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://vnvmjonbisgavoyzzwxp.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZudm1qb25iaXNnYXZveXp6d3hwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDg2MzEsImV4cCI6MjA5MzkyNDYzMX0.kpZokoJzRxQOzecAodOvgu2d8yvtB6ayHlXkD_77ang';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let columns = [];
+let cards = [];
+let members = [];
+let columnMembers = [];
+let cardMembers = [];
+let timerHistory = [];
+let actionLog = [];
+let editingCardId = null;
+let cardTimers = {};
+let sortableInstances = [];
+
+const DEFAULT_COLUMNS = [
+  { name: 'Brutos', position: 0 },
+  { name: 'Decupagem', position: 1 },
+  { name: 'Primeiro Corte', position: 2 },
+  { name: 'Revisão 1', position: 3 },
+  { name: 'Corte Final', position: 4 },
+  { name: 'Revisão Final', position: 5 },
+  { name: 'Upload', position: 6 }
+];
+
+// ─── INIT ───
+async function init() {
+  await loadAll();
+  if (columns.length === 0) {
+    const { data } = await sb.from('columns').insert(DEFAULT_COLUMNS).select();
+    columns = data || [];
+  }
+  renderBoard();
+  startTimers();
+  subscribeRealtime();
+}
+
+async function loadAll() {
+  const [colRes, cardRes, memRes, cmRes, cardMemRes, thRes, logRes] = await Promise.all([
+    sb.from('columns').select('*').order('position'),
+    sb.from('cards').select('*').order('position'),
+    sb.from('members').select('*').order('created_at'),
+    sb.from('column_members').select('*'),
+    sb.from('card_members').select('*'),
+    sb.from('timer_history').select('*').order('entered_at'),
+    sb.from('action_log').select('*').order('timestamp', { ascending: false }).limit(200)
+  ]);
+  columns = colRes.data || [];
+  cards = cardRes.data || [];
+  members = memRes.data || [];
+  columnMembers = cmRes.data || [];
+  cardMembers = cardMemRes.data || [];
+  timerHistory = thRes.data || [];
+  actionLog = logRes.data || [];
+}
+
+// ─── RENDER ───
+function renderBoard() {
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  sortableInstances.forEach(s => s.destroy());
+  sortableInstances = [];
+
+  columns.sort((a, b) => a.position - b.position).forEach((col, idx) => {
+    const colCards = cards.filter(c => c.column_id === col.id).sort((a, b) => a.position - b.position);
+    const colMems = columnMembers.filter(cm => cm.column_id === col.id);
+    const isUpload = idx === columns.length - 1;
+
+    const colEl = document.createElement('div');
+    colEl.className = 'column';
+    colEl.dataset.columnId = col.id;
+
+    colEl.innerHTML = `
+      <div class="column-header">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="column-title" contenteditable="true" data-col-id="${col.id}" spellcheck="false">${escHtml(col.name)}</div>
+          <span class="column-count">${colCards.length}</span>
+        </div>
+        <div class="column-members" data-col-id="${col.id}" onclick="toggleColAssign(event,'${col.id}')">
+          ${colMems.map(cm => {
+            const m = members.find(mm => mm.id === cm.member_id);
+            return m ? `<div class="member-badge" style="background:${m.color}" title="${escHtml(m.name)}">${initials(m.name)}</div>` : '';
+          }).join('')}
+          <div class="member-badge" style="background:rgba(255,255,255,.08);font-size:14px;border-color:transparent" title="Atribuir membros">+</div>
+        </div>
+        <div class="col-assign-dropdown" id="colAssign_${col.id}">
+          ${members.map(m => `
+            <div class="col-assign-option ${colMems.some(cm=>cm.member_id===m.id)?'selected':''}" onclick="toggleColMember(event,'${col.id}','${m.id}')">
+              <div class="member-badge" style="background:${m.color};width:22px;height:22px;font-size:9px;border:none">${initials(m.name)}</div>
+              ${escHtml(m.name)}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="column-body" id="colBody_${col.id}">
+        ${colCards.map(c => renderCardHTML(c, isUpload)).join('')}
+      </div>
+      <div class="column-footer">
+        <button class="add-card-btn" onclick="addCard('${col.id}')">+ Adicionar card</button>
+      </div>
+    `;
+    board.appendChild(colEl);
+
+    const titleEl = colEl.querySelector('.column-title');
+    titleEl.addEventListener('blur', () => renameColumn(col.id, titleEl.textContent.trim()));
+    titleEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }});
+
+    const bodyEl = colEl.querySelector('.column-body');
+    const sortable = new Sortable(bodyEl, {
+      group: 'kanban',
+      animation: 200,
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      dragClass: 'sortable-drag',
+      onEnd: handleDragEnd
+    });
+    sortableInstances.push(sortable);
+  });
+
+  renderLog();
+}
+
+function renderCardHTML(card, isUpload) {
+  const cMems = cardMembers.filter(cm => cm.card_id === card.id);
+  const lastCol = columns[columns.length - 1];
+  const isDone = isUpload || (lastCol && card.column_id === lastCol.id);
+  const timerText = getActiveTimerText(card);
+  const linkedText = linkify(escHtml(card.text));
+
+  return `
+    <div class="card ${isDone ? 'card-done' : ''}" data-card-id="${card.id}" ondblclick="openCardModal('${card.id}')">
+      <div class="card-actions">
+        <button class="card-action-btn" onclick="event.stopPropagation();openCardModal('${card.id}')" title="Editar">✎</button>
+        <button class="card-action-btn" onclick="event.stopPropagation();deleteCard('${card.id}')" title="Excluir">✕</button>
+      </div>
+      <div class="card-text">${linkedText}</div>
+      <div class="card-timer" data-timer-card="${card.id}">${isDone ? '✓ Concluído' : timerText}</div>
+      ${cMems.length ? `<div class="card-members">${cMems.map(cm => {
+        const m = members.find(mm => mm.id === cm.member_id);
+        return m ? `<div class="card-member-badge" style="background:${m.color}" title="${escHtml(m.name)}">${initials(m.name)}</div>` : '';
+      }).join('')}</div>` : ''}
+    </div>
+  `;
+}
+
+// ─── TIMER SYSTEM ───
+function getActiveTimerText(card) {
+  const lastCol = columns[columns.length - 1];
+  if (lastCol && card.column_id === lastCol.id) return '✓ Concluído';
+  const activeHist = timerHistory.find(th => th.card_id === card.id && !th.exited_at);
+  if (!activeHist) return '00:00:00';
+  const elapsed = Math.floor((Date.now() - new Date(activeHist.entered_at).getTime()) / 1000);
+  return formatDuration(elapsed);
+}
+
+function formatDuration(totalSec) {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function formatDurationReadable(totalSec) {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${totalSec % 60}s`;
+  return `${totalSec}s`;
+}
+
+function startTimers() {
+  setInterval(() => {
+    document.querySelectorAll('[data-timer-card]').forEach(el => {
+      const cardId = el.dataset.timerCard;
+      const card = cards.find(c => c.id === cardId);
+      if (!card) return;
+      const lastCol = columns[columns.length - 1];
+      if (lastCol && card.column_id === lastCol.id) return;
+      const activeHist = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
+      if (!activeHist) return;
+      const elapsed = Math.floor((Date.now() - new Date(activeHist.entered_at).getTime()) / 1000);
+      el.textContent = formatDuration(elapsed);
+    });
+  }, 1000);
+}
+
+// ─── CARD ACTIONS ───
+async function addCard(columnId) {
+  const col = columns.find(c => c.id === columnId);
+  const colCards = cards.filter(c => c.column_id === columnId);
+  const position = colCards.length;
+  const { data } = await sb.from('cards').insert({
+    text: 'Novo card',
+    column_id: columnId,
+    position: position
+  }).select().single();
+  if (data) {
+    cards.push(data);
+    const colName = col ? col.name : '';
+    await sb.from('timer_history').insert({
+      card_id: data.id,
+      column_name: colName,
+      entered_at: new Date().toISOString()
+    });
+    const { data: th } = await sb.from('timer_history').select('*').eq('card_id', data.id);
+    if (th) timerHistory = timerHistory.filter(t => t.card_id !== data.id).concat(th);
+    await logAction('card_created', `Card criado em "${colName}"`);
+    renderBoard();
+  }
+}
+
+async function deleteCard(cardId) {
+  const card = cards.find(c => c.id === cardId);
+  if (!card) return;
+  const col = columns.find(c => c.id === card.column_id);
+  await Promise.all([
+    sb.from('timer_history').delete().eq('card_id', cardId),
+    sb.from('card_members').delete().eq('card_id', cardId),
+    sb.from('cards').delete().eq('id', cardId)
+  ]);
+  cards = cards.filter(c => c.id !== cardId);
+  timerHistory = timerHistory.filter(t => t.card_id !== cardId);
+  cardMembers = cardMembers.filter(cm => cm.card_id !== cardId);
+  await logAction('card_deleted', `Card excluído de "${col ? col.name : ''}"`);
+  renderBoard();
+}
+
+function deleteCurrentCard() {
+  if (editingCardId) {
+    deleteCard(editingCardId);
+    closeCardModal();
+  }
+}
+
+async function handleDragEnd(evt) {
+  const cardId = evt.item.dataset.cardId;
+  const fromColId = evt.from.id.replace('colBody_', '');
+  const toColId = evt.to.id.replace('colBody_', '');
+  const newIndex = evt.newIndex;
+
+  const card = cards.find(c => c.id === cardId);
+  if (!card) return;
+
+  const fromCol = columns.find(c => c.id === fromColId);
+  const toCol = columns.find(c => c.id === toColId);
+  const oldColId = card.column_id;
+
+  card.column_id = toColId;
+  card.position = newIndex;
+
+  const siblingCards = cards.filter(c => c.column_id === toColId && c.id !== cardId).sort((a,b) => a.position - b.position);
+  siblingCards.splice(newIndex, 0, card);
+  const updates = siblingCards.map((c, i) => ({ ...c, position: i }));
+  for (const u of updates) {
+    const existing = cards.find(c => c.id === u.id);
+    if (existing) existing.position = u.position;
+  }
+
+  await sb.from('cards').upsert(updates.map(u => ({ id: u.id, column_id: u.column_id, position: u.position, text: u.text })));
+
+  if (fromColId !== toColId) {
+    const now = new Date().toISOString();
+    const activeTimer = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
+    if (activeTimer) {
+      const enteredAt = new Date(activeTimer.entered_at);
+      const duration = Math.floor((Date.now() - enteredAt.getTime()) / 1000);
+      await sb.from('timer_history').update({
+        exited_at: now,
+        duration_seconds: duration
+      }).eq('id', activeTimer.id);
+      activeTimer.exited_at = now;
+      activeTimer.duration_seconds = duration;
+    }
+
+    const lastCol = columns[columns.length - 1];
+    const isUploadCol = lastCol && toColId === lastCol.id;
+
+    if (!isUploadCol) {
+      const { data: newTh } = await sb.from('timer_history').insert({
+        card_id: cardId,
+        column_name: toCol ? toCol.name : '',
+        entered_at: now
+      }).select().single();
+      if (newTh) timerHistory.push(newTh);
+    }
+
+    await logAction('card_moved', `Card movido de "${fromCol?fromCol.name:''}" → "${toCol?toCol.name:''}"`);
+  }
+  renderBoard();
+}
+
+// ─── COLUMN ACTIONS ───
+async function renameColumn(colId, newName) {
+  const col = columns.find(c => c.id === colId);
+  if (!col || col.name === newName || !newName) return;
+  const oldName = col.name;
+  col.name = newName;
+  await sb.from('columns').update({ name: newName }).eq('id', colId);
+  await logAction('column_renamed', `Coluna renomeada: "${oldName}" → "${newName}"`);
+}
+
+// ─── COLUMN MEMBER ASSIGN ───
+function toggleColAssign(event, colId) {
+  event.stopPropagation();
+  const dropdown = document.getElementById(`colAssign_${colId}`);
+  const isActive = dropdown.classList.contains('active');
+  document.querySelectorAll('.col-assign-dropdown').forEach(d => d.classList.remove('active'));
+  if (!isActive) dropdown.classList.add('active');
+}
+
+async function toggleColMember(event, colId, memberId) {
+  event.stopPropagation();
+  const existing = columnMembers.find(cm => cm.column_id === colId && cm.member_id === memberId);
+  const member = members.find(m => m.id === memberId);
+  const col = columns.find(c => c.id === colId);
+  if (existing) {
+    await sb.from('column_members').delete().eq('column_id', colId).eq('member_id', memberId);
+    columnMembers = columnMembers.filter(cm => !(cm.column_id === colId && cm.member_id === memberId));
+    await logAction('member_unassigned_column', `${member?member.name:''} removido da coluna "${col?col.name:''}"`);
+  } else {
+    const { data } = await sb.from('column_members').insert({ column_id: colId, member_id: memberId }).select().single();
+    if (data) columnMembers.push(data);
+    await logAction('member_assigned_column', `${member?member.name:''} atribuído à coluna "${col?col.name:''}"`);
+  }
+  renderBoard();
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.col-assign-dropdown').forEach(d => d.classList.remove('active'));
+});
+
+// ─── CARD MODAL ───
+function openCardModal(cardId) {
+  editingCardId = cardId;
+  const card = cards.find(c => c.id === cardId);
+  if (!card) return;
+
+  document.getElementById('cardText').value = card.text;
+
+  const assignDiv = document.getElementById('cardMemberAssign');
+  const cMems = cardMembers.filter(cm => cm.card_id === cardId);
+  assignDiv.innerHTML = members.map(m => `
+    <div class="member-assign-item ${cMems.some(cm=>cm.member_id===m.id)?'selected':''}" data-member-id="${m.id}" onclick="this.classList.toggle('selected')">
+      <div class="member-badge" style="background:${m.color};width:24px;height:24px;font-size:9px;border:none">${initials(m.name)}</div>
+      ${escHtml(m.name)}
+    </div>
+  `).join('');
+
+  const histDiv = document.getElementById('timerHistory');
+  const cardHistory = timerHistory.filter(th => th.card_id === cardId);
+  histDiv.innerHTML = cardHistory.length ? cardHistory.map(th => {
+    let dur;
+    if (th.exited_at) {
+      dur = formatDurationReadable(th.duration_seconds || 0);
+    } else {
+      const elapsed = Math.floor((Date.now() - new Date(th.entered_at).getTime()) / 1000);
+      dur = formatDurationReadable(elapsed) + ' (ativo)';
+    }
+    return `<div class="timer-row"><span class="col-name">${escHtml(th.column_name)}</span><span class="col-duration">${dur}</span></div>`;
+  }).join('') : '<div style="color:var(--text-dim);font-size:13px">Sem histórico</div>';
+
+  document.getElementById('cardModal').classList.add('active');
+}
+
+function closeCardModal() {
+  document.getElementById('cardModal').classList.remove('active');
+  editingCardId = null;
+}
+
+async function saveCard() {
+  if (!editingCardId) return;
+  const card = cards.find(c => c.id === editingCardId);
+  if (!card) return;
+
+  const newText = document.getElementById('cardText').value.trim();
+  if (newText !== card.text) {
+    card.text = newText;
+    await sb.from('cards').update({ text: newText, updated_at: new Date().toISOString() }).eq('id', editingCardId);
+    await logAction('card_edited', `Card editado`);
+  }
+
+  const selectedMembers = [...document.querySelectorAll('#cardMemberAssign .member-assign-item.selected')].map(el => el.dataset.memberId);
+  const currentMems = cardMembers.filter(cm => cm.card_id === editingCardId).map(cm => cm.member_id);
+  const toAdd = selectedMembers.filter(id => !currentMems.includes(id));
+  const toRemove = currentMems.filter(id => !selectedMembers.includes(id));
+
+  for (const mId of toRemove) {
+    await sb.from('card_members').delete().eq('card_id', editingCardId).eq('member_id', mId);
+    cardMembers = cardMembers.filter(cm => !(cm.card_id === editingCardId && cm.member_id === mId));
+    const m = members.find(mm => mm.id === mId);
+    await logAction('member_unassigned_card', `${m?m.name:''} removido do card`);
+  }
+  for (const mId of toAdd) {
+    const { data } = await sb.from('card_members').insert({ card_id: editingCardId, member_id: mId }).select().single();
+    if (data) cardMembers.push(data);
+    const m = members.find(mm => mm.id === mId);
+    await logAction('member_assigned_card', `${m?m.name:''} atribuído ao card`);
+  }
+
+  closeCardModal();
+  renderBoard();
+}
+
+function insertLink() {
+  const url = prompt('URL do link:');
+  if (!url) return;
+  const textarea = document.getElementById('cardText');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const selectedText = text.substring(start, end) || url;
+  textarea.value = text.substring(0, start) + url + text.substring(end);
+  textarea.focus();
+}
+
+// ─── MEMBER MANAGEMENT ───
+function openMemberModal() {
+  renderMemberList();
+  document.getElementById('memberModal').classList.add('active');
+}
+
+function closeMemberModal() {
+  document.getElementById('memberModal').classList.remove('active');
+}
+
+function renderMemberList() {
+  const list = document.getElementById('memberList');
+  list.innerHTML = members.map(m => `
+    <div class="member-item">
+      <div class="member-badge" style="background:${m.color}">${initials(m.name)}</div>
+      <span class="member-name">${escHtml(m.name)}</span>
+      <button class="btn btn-sm btn-danger" onclick="deleteMember('${m.id}')">Excluir</button>
+    </div>
+  `).join('') || '<div style="color:var(--text-dim);font-size:13px">Nenhum membro. Adicione abaixo.</div>';
+}
+
+async function addMember() {
+  const name = document.getElementById('newMemberName').value.trim();
+  const color = document.getElementById('newMemberColor').value;
+  if (!name) return;
+
+  const { data } = await sb.from('members').insert({ name, color }).select().single();
+  if (data) {
+    members.push(data);
+    document.getElementById('newMemberName').value = '';
+    await logAction('member_added', `Membro "${name}" adicionado`);
+    renderMemberList();
+    renderBoard();
+  }
+}
+
+async function deleteMember(memberId) {
+  const member = members.find(m => m.id === memberId);
+  await Promise.all([
+    sb.from('column_members').delete().eq('member_id', memberId),
+    sb.from('card_members').delete().eq('member_id', memberId),
+    sb.from('members').delete().eq('id', memberId)
+  ]);
+  members = members.filter(m => m.id !== memberId);
+  columnMembers = columnMembers.filter(cm => cm.member_id !== memberId);
+  cardMembers = cardMembers.filter(cm => cm.member_id !== memberId);
+  await logAction('member_removed', `Membro "${member?member.name:''}" removido`);
+  renderMemberList();
+  renderBoard();
+}
+
+// ─── ACTION LOG ───
+async function logAction(actionType, description) {
+  const now = new Date();
+  const { data } = await sb.from('action_log').insert({
+    action_type: actionType,
+    description: description,
+    timestamp: now.toISOString()
+  }).select().single();
+  if (data) {
+    actionLog.unshift(data);
+    renderLog();
+  }
+}
+
+function renderLog() {
+  const body = document.getElementById('logBody');
+  body.innerHTML = actionLog.slice(0, 100).map(entry => {
+    const d = new Date(entry.timestamp);
+    const spTime = d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+    return `<div class="log-entry"><span class="log-time">${spTime}</span> — <span class="log-desc">${escHtml(entry.description)}</span></div>`;
+  }).join('');
+}
+
+function toggleLog() {
+  document.getElementById('logPanel').classList.toggle('active');
+}
+
+// ─── REALTIME ───
+function subscribeRealtime() {
+  sb.channel('kanban-realtime')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'columns' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'column_members' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'card_members' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'timer_history' }, () => reload())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'action_log' }, payload => {
+      if (payload.eventType === 'INSERT' && payload.new) {
+        const exists = actionLog.find(a => a.id === payload.new.id);
+        if (!exists) { actionLog.unshift(payload.new); renderLog(); }
+      }
+    })
+    .subscribe();
+}
+
+let reloadTimeout = null;
+function reload() {
+  if (reloadTimeout) clearTimeout(reloadTimeout);
+  reloadTimeout = setTimeout(async () => {
+    await loadAll();
+    renderBoard();
+  }, 300);
+}
+
+// ─── HELPERS ───
+function escHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function linkify(text) {
+  return text.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+
+function initials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+  return name.substring(0, 2).toUpperCase();
+}
+
+// Close modals on overlay click
+document.getElementById('cardModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeCardModal(); });
+document.getElementById('memberModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeMemberModal(); });
+
+init();
+</script>
+</body>
+</html>
