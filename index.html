@@ -161,6 +161,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .column{min-width:200px;width:200px}
 .log-panel{width:100%;border-radius:16px 16px 0 0}
 }
+/* PIPELINE COUNTER */
+.pipeline-counter{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:10px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;color:var(--good);letter-spacing:.02em;white-space:nowrap}
+.pipeline-counter .counter-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em}
+
 @media print{.topbar,.log-toggle,.log-panel{display:none}.board{overflow:visible}}
 </style>
 </head>
@@ -170,6 +174,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 <div class="topbar">
   <h1>Kanban Conteúdo</h1>
   <div class="topbar-actions">
+    <div class="pipeline-counter"><span class="counter-label">Pipeline</span><span id="pipelineCounter">0/7</span></div>
     <button class="btn" onclick="openMemberModal()">👥 Equipe</button>
     <button class="btn" onclick="toggleLog()">📋 Log</button>
     <button class="btn" onclick="openSettingsModal()" title="Configurações">⚙️</button>
@@ -252,7 +257,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
       <h2>⚙️ Configurações</h2>
       <div style="display:flex;flex-direction:column;gap:12px">
         <button class="btn btn-danger" onclick="confirmResetRedZone()" style="width:100%;justify-content:center;padding:14px">🔴 Resetar Contagem Red Zone</button>
-        <p style="font-size:12px;color:var(--text-dim);margin-top:-6px">Remove todos os registros de tempo acumulado em Red Zone das tabelas red_zone_log e red_zone_member_log.</p>
+        <p style="font-size:12px;color:var(--text-dim);margin-top:-6px">Remove todos os registros de tempo acumulado em Red Zone e reseta o contador de Pipeline (0/7).</p>
         <button class="btn" onclick="confirmStoreRedZone()" style="width:100%;justify-content:center;padding:14px;border-color:var(--accent-purple);color:var(--accent-purple)">💾 Salvar Snapshot Red Zone</button>
         <p style="font-size:12px;color:var(--text-dim);margin-top:-6px">Exporta os dados atuais de Red Zone como arquivo JSON.</p>
       </div>
@@ -293,6 +298,43 @@ let sortableInstances = [];
 let redZoneLogs = [];
 let activeRedZones = {};
 let rzCheckRunning = false;
+const PIPELINE_TARGET = 7;
+
+function getPipelineCount() {
+  return parseInt(localStorage.getItem('pipeline_completed') || '0', 10);
+}
+function setPipelineCount(n) {
+  localStorage.setItem('pipeline_completed', String(n));
+  updatePipelineDisplay();
+}
+function getPipelineCountedCards() {
+  try { return JSON.parse(localStorage.getItem('pipeline_counted_cards') || '[]'); } catch { return []; }
+}
+function addPipelineCountedCard(cardId) {
+  const counted = getPipelineCountedCards();
+  if (counted.includes(cardId)) return false;
+  counted.push(cardId);
+  localStorage.setItem('pipeline_counted_cards', JSON.stringify(counted));
+  setPipelineCount(getPipelineCount() + 1);
+  return true;
+}
+function resetPipelineCounter() {
+  localStorage.setItem('pipeline_completed', '0');
+  localStorage.setItem('pipeline_counted_cards', '[]');
+  updatePipelineDisplay();
+}
+function updatePipelineDisplay() {
+  const el = document.getElementById('pipelineCounter');
+  if (el) el.textContent = `${getPipelineCount()}/${PIPELINE_TARGET}`;
+}
+function syncPipelineCounter() {
+  const lastCol = columns[columns.length - 1];
+  if (lastCol) {
+    const uploadCards = cards.filter(c => c.column_id === lastCol.id);
+    uploadCards.forEach(c => addPipelineCountedCard(c.id));
+  }
+  updatePipelineDisplay();
+}
 
 const DEFAULT_COLUMNS = [
   { name: 'Brutos', position: 0 },
@@ -315,6 +357,7 @@ async function init() {
   startTimers();
   startRedZoneTimers();
   subscribeRealtime();
+  syncPipelineCounter();
 }
 
 async function loadAll() {
@@ -567,6 +610,10 @@ async function handleDragEnd(evt) {
 
     const lastCol = columns[columns.length - 1];
     const isUploadCol = lastCol && toColId === lastCol.id;
+
+    if (isUploadCol) {
+      addPipelineCountedCard(cardId);
+    }
 
     if (!isUploadCol) {
       const { data: newTh } = await sb.from('timer_history').insert({
@@ -1039,8 +1086,9 @@ async function confirmResetRedZone() {
 
   redZoneLogs = [];
   activeRedZones = {};
-  await logAction('red_zone_reset', '🔴 Todos os dados de Red Zone foram resetados via Configurações');
-  alert('Red Zone resetada com sucesso!');
+  resetPipelineCounter();
+  await logAction('red_zone_reset', '🔴 Todos os dados de Red Zone e Pipeline foram resetados via Configurações');
+  alert('Red Zone e Pipeline resetados com sucesso!');
   closeSettingsModal();
   renderBoard();
 }
