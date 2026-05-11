@@ -285,6 +285,21 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+let serverTimeOffset = 0;
+async function syncServerClock() {
+  try {
+    const t0 = Date.now();
+    const res = await fetch(SUPABASE_URL + '/rest/v1/', { headers: { 'apikey': SUPABASE_KEY } });
+    const t1 = Date.now();
+    const sd = res.headers.get('date');
+    if (sd) {
+      serverTimeOffset = new Date(sd).getTime() - (t0 + (t1 - t0) / 2);
+    }
+  } catch(e) {}
+}
+function serverNow() { return Date.now() + serverTimeOffset; }
+function serverNowISO() { return new Date(serverNow()).toISOString(); }
+
 let columns = [];
 let cards = [];
 let members = [];
@@ -348,6 +363,7 @@ const DEFAULT_COLUMNS = [
 
 // ─── INIT ───
 async function init() {
+  await syncServerClock();
   await loadAll();
   if (columns.length === 0) {
     const { data } = await sb.from('columns').insert(DEFAULT_COLUMNS).select();
@@ -358,6 +374,7 @@ async function init() {
   startRedZoneTimers();
   subscribeRealtime();
   syncPipelineCounter();
+  setInterval(syncServerClock, 300000);
 }
 
 async function loadAll() {
@@ -485,8 +502,8 @@ function getActiveTimerText(card) {
   if (lastCol && card.column_id === lastCol.id) return '✓ Concluído';
   const activeHist = timerHistory.find(th => th.card_id === card.id && !th.exited_at);
   if (!activeHist) return '00:00:00';
-  const elapsed = Math.floor((Date.now() - new Date(activeHist.entered_at).getTime()) / 1000);
-  return formatDuration(elapsed);
+  const elapsed = Math.floor((serverNow() - new Date(activeHist.entered_at).getTime()) / 1000);
+  return formatDuration(Math.max(0, elapsed));
 }
 
 function formatDuration(totalSec) {
@@ -514,8 +531,8 @@ function startTimers() {
       if (lastCol && card.column_id === lastCol.id) return;
       const activeHist = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
       if (!activeHist) return;
-      const elapsed = Math.floor((Date.now() - new Date(activeHist.entered_at).getTime()) / 1000);
-      el.textContent = formatDuration(elapsed);
+      const elapsed = Math.floor((serverNow() - new Date(activeHist.entered_at).getTime()) / 1000);
+      el.textContent = formatDuration(Math.max(0, elapsed));
     });
   }, 1000);
 }
@@ -536,7 +553,7 @@ async function addCard(columnId) {
     await sb.from('timer_history').insert({
       card_id: data.id,
       column_name: colName,
-      entered_at: new Date().toISOString()
+      entered_at: serverNowISO()
     });
     const { data: th } = await sb.from('timer_history').select('*').eq('card_id', data.id);
     if (th) timerHistory = timerHistory.filter(t => t.card_id !== data.id).concat(th);
@@ -595,11 +612,11 @@ async function handleDragEnd(evt) {
   await sb.from('cards').upsert(updates.map(u => ({ id: u.id, column_id: u.column_id, position: u.position, text: u.text })));
 
   if (fromColId !== toColId) {
-    const now = new Date().toISOString();
+    const now = serverNowISO();
     const activeTimer = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
     if (activeTimer) {
       const enteredAt = new Date(activeTimer.entered_at);
-      const duration = Math.floor((Date.now() - enteredAt.getTime()) / 1000);
+      const duration = Math.floor((serverNow() - enteredAt.getTime()) / 1000);
       await sb.from('timer_history').update({
         exited_at: now,
         duration_seconds: duration
@@ -696,8 +713,8 @@ function openCardModal(cardId) {
     if (th.exited_at) {
       dur = formatDurationReadable(th.duration_seconds || 0);
     } else {
-      const elapsed = Math.floor((Date.now() - new Date(th.entered_at).getTime()) / 1000);
-      dur = formatDurationReadable(elapsed) + ' (ativo)';
+      const elapsed = Math.floor((serverNow() - new Date(th.entered_at).getTime()) / 1000);
+      dur = formatDurationReadable(Math.max(0, elapsed)) + ' (ativo)';
     }
     return `<div class="timer-row"><span class="col-name">${escHtml(th.column_name)}</span><span class="col-duration">${dur}</span></div>`;
   }).join('') : '<div style="color:var(--text-dim);font-size:13px">Sem histórico</div>';
@@ -718,7 +735,7 @@ async function saveCard() {
   const newText = document.getElementById('cardText').value.trim();
   if (newText !== card.text) {
     card.text = newText;
-    await sb.from('cards').update({ text: newText, updated_at: new Date().toISOString() }).eq('id', editingCardId);
+    await sb.from('cards').update({ text: newText, updated_at: serverNowISO() }).eq('id', editingCardId);
     await logAction('card_edited', `Card editado`);
   }
 
@@ -809,11 +826,10 @@ async function deleteMember(memberId) {
 
 // ─── ACTION LOG ───
 async function logAction(actionType, description) {
-  const now = new Date();
   const { data } = await sb.from('action_log').insert({
     action_type: actionType,
     description: description,
-    timestamp: now.toISOString()
+    timestamp: serverNowISO()
   }).select().single();
   if (data) {
     actionLog.unshift(data);
@@ -892,13 +908,24 @@ async function checkRedZones() {
 }
 async function _checkRedZonesInner() {
   const rules = getRedZoneRules();
+
+  // Restore active red zones from DB FIRST (before creating new ones)
+  for (const rule of rules) {
+    if (!activeRedZones[rule.redColId]) {
+      const activeLog = redZoneLogs.find(r => r.column_id === rule.redColId && !r.ended_at);
+      if (activeLog) {
+        activeRedZones[rule.redColId] = { startedAt: new Date(activeLog.started_at), logId: activeLog.id };
+      }
+    }
+  }
+
   for (const rule of rules) {
     const watchCards = cards.filter(c => c.column_id === rule.watchColId);
     const shouldBeRed = watchCards.length === 0;
     const isActive = activeRedZones[rule.redColId];
 
     if (shouldBeRed && !isActive) {
-      const now = new Date().toISOString();
+      const now = serverNowISO();
       const colMems = columnMembers.filter(cm => cm.column_id === rule.redColId);
       const { data } = await sb.from('red_zone_log').insert({
         column_id: rule.redColId,
@@ -919,31 +946,17 @@ async function _checkRedZonesInner() {
         await logAction('red_zone_started', `🔴 Red Zone ativada em "${rule.redColName}" (${rule.watchColName} vazia)`);
       }
     } else if (!shouldBeRed && isActive) {
-      const now = new Date();
-      const duration = Math.floor((now.getTime() - isActive.startedAt.getTime()) / 1000);
+      const nowMs = serverNow();
+      const duration = Math.floor((nowMs - isActive.startedAt.getTime()) / 1000);
+      const nowISO = new Date(nowMs).toISOString();
       await sb.from('red_zone_log').update({
-        ended_at: now.toISOString(),
+        ended_at: nowISO,
         duration_seconds: duration
       }).eq('id', isActive.logId);
       const logEntry = redZoneLogs.find(r => r.id === isActive.logId);
-      if (logEntry) { logEntry.ended_at = now.toISOString(); logEntry.duration_seconds = duration; }
+      if (logEntry) { logEntry.ended_at = nowISO; logEntry.duration_seconds = duration; }
       delete activeRedZones[rule.redColId];
       await logAction('red_zone_ended', `✅ Red Zone encerrada em "${rule.redColName}" — duração: ${formatDurationReadable(duration)}`);
-    } else if (shouldBeRed && isActive) {
-      // already active, keep it
-    }
-  }
-
-  // Restore active red zones from DB on page load
-  for (const rule of rules) {
-    if (!activeRedZones[rule.redColId]) {
-      const activeLog = redZoneLogs.find(r => r.column_id === rule.redColId && !r.ended_at);
-      if (activeLog) {
-        const watchCards = cards.filter(c => c.column_id === rule.watchColId);
-        if (watchCards.length === 0) {
-          activeRedZones[rule.redColId] = { startedAt: new Date(activeLog.started_at), logId: activeLog.id };
-        }
-      }
     }
   }
 }
@@ -954,8 +967,8 @@ function startRedZoneTimers() {
       const colId = el.dataset.rzCol;
       const active = activeRedZones[colId];
       if (!active) return;
-      const elapsed = Math.floor((Date.now() - active.startedAt.getTime()) / 1000);
-      el.textContent = formatDuration(elapsed);
+      const elapsed = Math.floor((serverNow() - active.startedAt.getTime()) / 1000);
+      el.textContent = formatDuration(Math.max(0, elapsed));
     });
   }, 1000);
 }
@@ -978,7 +991,7 @@ function renderRzPopup(colId) {
   const colLogs = redZoneLogs.filter(r => r.column_id === colId);
   const totalSecs = colLogs.reduce((sum, r) => {
     if (r.ended_at) return sum + (r.duration_seconds || 0);
-    return sum + Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000);
+    return sum + Math.floor((serverNow() - new Date(r.started_at).getTime()) / 1000);
   }, 0);
 
   popup.innerHTML = `
@@ -990,7 +1003,7 @@ function renderRzPopup(colId) {
     ${colLogs.length ? colLogs.slice(0, 20).map(r => {
       const start = new Date(r.started_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       const end = r.ended_at ? new Date(r.ended_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'ativo';
-      const dur = r.ended_at ? formatDurationReadable(r.duration_seconds || 0) : formatDurationReadable(Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000)) + ' (ativo)';
+      const dur = r.ended_at ? formatDurationReadable(r.duration_seconds || 0) : formatDurationReadable(Math.floor((serverNow() - new Date(r.started_at).getTime()) / 1000)) + ' (ativo)';
       return `<div class="rz-event"><span class="rz-date">${start} → ${end}</span><br><span class="rz-dur">${dur}</span></div>`;
     }).join('') : '<div class="rz-no-events">Nenhum evento registrado</div>'}
     ${colLogs.length > 0 ? `<button class="btn btn-sm" onclick="openRzModal('${colId}')" style="margin-top:4px">Ver detalhes completos</button>` : ''}
@@ -1002,7 +1015,7 @@ function openRzModal(colId) {
   const colLogs = redZoneLogs.filter(r => r.column_id === colId);
   const totalSecs = colLogs.reduce((sum, r) => {
     if (r.ended_at) return sum + (r.duration_seconds || 0);
-    return sum + Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000);
+    return sum + Math.floor((serverNow() - new Date(r.started_at).getTime()) / 1000);
   }, 0);
 
   document.getElementById('rzModalTitle').textContent = `🔴 Red Zone — ${col ? col.name : ''}`;
@@ -1017,7 +1030,7 @@ function openRzModal(colId) {
       ${colLogs.length ? colLogs.map(r => {
         const start = new Date(r.started_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const end = r.ended_at ? new Date(r.ended_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '⏱ ativo agora';
-        const dur = r.ended_at ? formatDurationReadable(r.duration_seconds || 0) : formatDurationReadable(Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000)) + ' (ativo)';
+        const dur = r.ended_at ? formatDurationReadable(r.duration_seconds || 0) : formatDurationReadable(Math.floor((serverNow() - new Date(r.started_at).getTime()) / 1000)) + ' (ativo)';
         return `<div class="timer-row" style="flex-direction:column;gap:4px">
           <div style="display:flex;justify-content:space-between"><span class="col-name">Início: ${start}</span><span class="col-duration" style="color:var(--low)">${dur}</span></div>
           <div style="font-size:11px;color:var(--text-dim)">Fim: ${end}</div>
