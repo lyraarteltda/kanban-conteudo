@@ -313,6 +313,7 @@ let sortableInstances = [];
 let redZoneLogs = [];
 let activeRedZones = {};
 let rzCheckRunning = false;
+let _isDragging = false;
 const PIPELINE_TARGET = 7;
 
 function getPipelineCount() {
@@ -586,64 +587,72 @@ function deleteCurrentCard() {
 }
 
 async function handleDragEnd(evt) {
-  const cardId = evt.item.dataset.cardId;
-  const fromColId = evt.from.id.replace('colBody_', '');
-  const toColId = evt.to.id.replace('colBody_', '');
-  const newIndex = evt.newIndex;
+  _isDragging = true;
+  try {
+    const cardId = evt.item.dataset.cardId;
+    const fromColId = evt.from.id.replace('colBody_', '');
+    const toColId = evt.to.id.replace('colBody_', '');
+    const newIndex = evt.newIndex;
 
-  const card = cards.find(c => c.id === cardId);
-  if (!card) return;
+    const card = cards.find(c => c.id === cardId);
+    if (!card) return;
 
-  const fromCol = columns.find(c => c.id === fromColId);
-  const toCol = columns.find(c => c.id === toColId);
-  const oldColId = card.column_id;
+    const fromCol = columns.find(c => c.id === fromColId);
+    const toCol = columns.find(c => c.id === toColId);
 
-  card.column_id = toColId;
-  card.position = newIndex;
+    card.column_id = toColId;
+    card.position = newIndex;
 
-  const siblingCards = cards.filter(c => c.column_id === toColId && c.id !== cardId).sort((a,b) => a.position - b.position);
-  siblingCards.splice(newIndex, 0, card);
-  const updates = siblingCards.map((c, i) => ({ ...c, position: i }));
-  for (const u of updates) {
-    const existing = cards.find(c => c.id === u.id);
-    if (existing) existing.position = u.position;
-  }
+    const siblingCards = cards.filter(c => c.column_id === toColId && c.id !== cardId).sort((a,b) => a.position - b.position);
+    siblingCards.splice(newIndex, 0, card);
+    siblingCards.forEach((c, i) => { c.position = i; });
 
-  await sb.from('cards').upsert(updates.map(u => ({ id: u.id, column_id: u.column_id, position: u.position, text: u.text })));
-
-  if (fromColId !== toColId) {
     const now = serverNowISO();
-    const activeTimer = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
-    if (activeTimer) {
-      const enteredAt = new Date(activeTimer.entered_at);
-      const duration = Math.floor((serverNow() - enteredAt.getTime()) / 1000);
-      await sb.from('timer_history').update({
-        exited_at: now,
-        duration_seconds: duration
-      }).eq('id', activeTimer.id);
-      activeTimer.exited_at = now;
-      activeTimer.duration_seconds = duration;
+
+    const dbOps = [];
+    dbOps.push(sb.from('cards').update({ column_id: toColId, position: newIndex, updated_at: now }).eq('id', cardId));
+    const posUpdates = siblingCards.filter(c => c.id !== cardId);
+    for (const c of posUpdates) {
+      dbOps.push(sb.from('cards').update({ position: c.position }).eq('id', c.id));
     }
+    await Promise.all(dbOps);
 
-    const lastCol = columns[columns.length - 1];
-    const isUploadCol = lastCol && toColId === lastCol.id;
+    if (fromColId !== toColId) {
+      const activeTimer = timerHistory.find(th => th.card_id === cardId && !th.exited_at);
+      if (activeTimer) {
+        const enteredAt = new Date(activeTimer.entered_at);
+        const duration = Math.floor((serverNow() - enteredAt.getTime()) / 1000);
+        await sb.from('timer_history').update({
+          exited_at: now,
+          duration_seconds: duration
+        }).eq('id', activeTimer.id);
+        activeTimer.exited_at = now;
+        activeTimer.duration_seconds = duration;
+      }
 
-    if (isUploadCol) {
-      addPipelineCountedCard(cardId);
+      const lastCol = columns[columns.length - 1];
+      const isUploadCol = lastCol && toColId === lastCol.id;
+
+      if (isUploadCol) {
+        addPipelineCountedCard(cardId);
+      }
+
+      if (!isUploadCol) {
+        const { data: newTh } = await sb.from('timer_history').insert({
+          card_id: cardId,
+          column_name: toCol ? toCol.name : '',
+          entered_at: now
+        }).select().single();
+        if (newTh) timerHistory.push(newTh);
+      }
+
+      await logAction('card_moved', `Card movido de "${fromCol?fromCol.name:''}" → "${toCol?toCol.name:''}"`);
     }
-
-    if (!isUploadCol) {
-      const { data: newTh } = await sb.from('timer_history').insert({
-        card_id: cardId,
-        column_name: toCol ? toCol.name : '',
-        entered_at: now
-      }).select().single();
-      if (newTh) timerHistory.push(newTh);
-    }
-
-    await logAction('card_moved', `Card movido de "${fromCol?fromCol.name:''}" → "${toCol?toCol.name:''}"`);
+    renderBoard();
+  } finally {
+    _isDragging = false;
+    reload();
   }
-  renderBoard();
 }
 
 // ─── COLUMN ACTIONS ───
@@ -871,8 +880,10 @@ function subscribeRealtime() {
 
 let reloadTimeout = null;
 function reload() {
+  if (_isDragging) return;
   if (reloadTimeout) clearTimeout(reloadTimeout);
   reloadTimeout = setTimeout(async () => {
+    if (_isDragging) return;
     await loadAll();
     renderBoard();
   }, 300);
