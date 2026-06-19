@@ -169,6 +169,25 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 </style>
 </head>
 <body>
+<!-- ───────────────────────────────────────────────────────────────────────────
+  COSMETIC ACCESS GATE — client-side deterrent ONLY. This is NOT a security control.
+  The credentials below are visible in page source, and the Supabase database is
+  NOT protected by this gate (the anon key + REST API remain directly reachable).
+  Real protection requires Row Level Security on the database.
+  See security assessment dated 2026-06-19.
+──────────────────────────────────────────────────────────────────────────── -->
+<div id="authGate" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at top,#1a1030 0%,#0a0a0f 55%),radial-gradient(ellipse at bottom right,#0c2030 0%,#0a0a0f 60%);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+  <form id="authForm" autocomplete="off" style="width:min(90vw,360px);background:rgba(19,22,31,.9);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:32px 28px;backdrop-filter:blur(12px);box-shadow:0 20px 60px rgba(0,0,0,.5)">
+    <h1 style="font-size:20px;font-weight:800;letter-spacing:-.02em;margin-bottom:6px;background:linear-gradient(135deg,#fff 0%,#a78bfa 50%,#f472b6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Kanban Conteúdo</h1>
+    <p style="color:#9ca3af;font-size:13px;margin-bottom:22px">Maestros da IA — acesso restrito</p>
+    <label style="display:block;color:#9ca3af;font-size:12px;margin-bottom:6px">Usuário</label>
+    <input id="authUser" type="text" autocomplete="username" style="width:100%;padding:10px 12px;margin-bottom:14px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:#e8e8ec;font-size:14px;outline:none">
+    <label style="display:block;color:#9ca3af;font-size:12px;margin-bottom:6px">Senha</label>
+    <input id="authPass" type="password" autocomplete="current-password" style="width:100%;padding:10px 12px;margin-bottom:18px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:#e8e8ec;font-size:14px;outline:none">
+    <button type="submit" style="width:100%;padding:11px;border-radius:8px;border:none;background:linear-gradient(135deg,#a78bfa,#f472b6);color:#fff;font-weight:600;font-size:14px;cursor:pointer">Entrar</button>
+    <p id="authError" style="color:#ef4444;font-size:13px;margin-top:14px;min-height:18px;text-align:center"></p>
+  </form>
+</div>
 <div class="bg-gradient"></div>
 
 <div class="topbar">
@@ -1149,7 +1168,35 @@ document.getElementById('memberModal').addEventListener('click', e => { if (e.ta
 document.getElementById('rzModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeRzModal(); });
 document.getElementById('settingsModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettingsModal(); });
 
-init();
+// ── Cosmetic access gate (client-side deterrent ONLY — NOT a security control) ──
+// Credentials are visible in this page's source. The Supabase data is NOT protected
+// by this gate — anyone can read/write it directly via the REST API + anon key.
+// Real protection requires RLS on the database. See security assessment 2026-06-19.
+(function authGateInit(){
+  var GATE_USER = 'adminmaestros';
+  var GATE_PASS = 'adminmaestros';
+  var gate = document.getElementById('authGate');
+  var form = document.getElementById('authForm');
+  function unlock(){
+    try { sessionStorage.setItem('km_authed','1'); } catch(e){}
+    gate.style.display = 'none';
+    init();
+  }
+  var already = false;
+  try { already = sessionStorage.getItem('km_authed') === '1'; } catch(e){}
+  if (already) { gate.style.display = 'none'; init(); return; }
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    var u = document.getElementById('authUser').value.trim();
+    var p = document.getElementById('authPass').value;
+    if (u === GATE_USER && p === GATE_PASS) {
+      unlock();
+    } else {
+      document.getElementById('authError').textContent = 'Usuário ou senha inválidos.';
+    }
+  });
+  document.getElementById('authUser').focus();
+})();
 </script>
 </body>
 </html>
